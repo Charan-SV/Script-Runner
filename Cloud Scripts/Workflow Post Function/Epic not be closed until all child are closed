@@ -1,0 +1,11 @@
+issue.isEpic && issue.stories.every(
+story => story.status.name == 'Done (No QA Required)' || 
+story.status.name == 'Closed' || 
+story.status.name == 'Cancel' || 
+story.status.name == 'Done' || 
+story.status.name == 'Closed - Fixed' || 
+story.status.name == 'Closed - No Changes' || 
+story.status.name == 'Approved Deferred' || 
+story.status.name == 'Review Completed' || 
+story.status.name == 'Release Approved' || 
+story.status.name == 'Released'  )
