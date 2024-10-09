@@ -1,1 +1,121 @@
-
+def issueKey = issue.key
+ 
+ 
+def skipableAssignees = []
+ 
+ 
+// Proceed if the issue is not a sub-task
+if (issue.fields.issuetype.subtask != true) {
+    def subTasks = issue.fields.subtasks
+    logger.warn("Processing subtasks for issue: ${issueKey}")
+ 
+    if (subTasks) {
+        // Process each subtask
+        subTasks.each { subTask ->
+            if (subTask.fields.issuetype.id == "10008" && subTask.fields.status.id != "10009" && subTask.fields.status.id != "10010") {
+                def subtaskDetails = get('/rest/api/2/issue/' + subTask.key)
+                    .header('Content-Type', 'application/json')
+                    .asObject(Map)
+ 
+                // Check if the subtask details were retrieved successfully
+                if (subtaskDetails.status != 200) {
+                    logger.warn("Failed to fetch subtask ${subTask.key}: Status: ${subtaskDetails.status} ${subtaskDetails.body}")
+                    return
+                }
+ 
+                // Collect the assignee ID if it exists
+                def assigneeId = subtaskDetails.body.fields.assignee?.accountId
+                if (assigneeId) {
+                    skipableAssignees.add(assigneeId)
+                } else {
+                    logger.warn("No assignee found for subtask ${subTask.key}")
+                }
+            }
+        }
+ 
+        logger.warn("Skippable assignees collected: ${skipableAssignees}")
+    } else {
+        logger.warn("No subtasks found for issue ${issueKey}")
+    }
+} else {
+    logger.warn("The issue ${issueKey} is a subtask and will not be processed.")
+}
+ 
+// Retrieve the reviewers from the custom fields
+def m_reviewers = issue.fields.customfield_10060?.collect { it.accountId } ?: []
+def optional_Reviewer = issue.fields.customfield_10061?.collect { it.accountId } ?: []
+def project_key = issue.fields.project.key
+ 
+logger.warn("Reviewers found: ${m_reviewers}")
+ 
+if (m_reviewers) {
+    // Create and assign review subtasks for each mandatory reviewer
+    createAndAssignReviewSubtask(m_reviewers, skipableAssignees, true, project_key, issue)
+} else {
+    logger.warn("No mandatory reviewers found.")
+}
+ 
+if (optional_Reviewer) {
+    // Create and assign review subtasks for each optional reviewer
+    createAndAssignReviewSubtask(optional_Reviewer, skipableAssignees, false, project_key, issue)
+} else {
+    logger.warn("No optional reviewers found.")
+}
+ 
+// Function to create and assign review subtasks
+def createAndAssignReviewSubtask(List reviewers, List skipList, boolean isMandatory, project_key, issue) {
+    reviewers.each { reviewer -> // Iterate over each reviewer
+        if (reviewer && !skipList.contains(reviewer)) { // Check if reviewer is not null and not in skip list
+            logger.warn("Creating subtask for reviewer: ${reviewer}")
+            createSubtask(issue.id, "10008", reviewer, project_key, isMandatory, issue) // Call to create subtask
+            logger.warn("Subtask creation request sent for reviewer: ${reviewer}")
+        } else {
+            logger.warn("Skipping reviewer: ${reviewer}")
+        }
+    }
+    logger.warn("Completed: createAndAssignReviewSubtask")
+}
+ 
+// Function to create a subtask
+def createSubtask(parentIssueId, subtaskTypeId, assignee, project_key, boolean isMandatory, issue) {
+    def summary = isMandatory ? "[Mandatory] Review for: ${issue.fields.summary}" : "[Optional] Review for: ${issue.fields.summary}"
+    def customFieldValue = isMandatory ? "Yes" : "No"
+    def assigneeId = assignee.toString() // Log the assignee type and value
+ 
+    logger.warn("Project Key: ${project_key}")
+    logger.warn("Subtask Type ID: ${subtaskTypeId}")
+    logger.warn("Parent Issue ID: ${parentIssueId}")
+    logger.warn("Summary: ${summary}")
+    logger.warn("Assignee ID: ${assigneeId}") // This should now correctly be a string
+ 
+    // Create the subtask
+    def resp = post("/rest/api/2/issue")
+        .header("Content-Type", "application/json")
+        .body(
+            fields: [
+                project: [
+                    key: project_key // Use project key for the subtask
+                ],
+                issuetype: [
+                    id: subtaskTypeId // Subtask type ID
+                ],
+                parent: [
+                    id: parentIssueId // Parent issue ID
+                ],
+                summary: summary, // Summary of the subtask
+                assignee: [
+                    id: assigneeId // Pass the assignee ID directly as a string
+                ],
+                customfield_10062: [ value: customFieldValue ] // Set the custom field value
+            ]
+        )
+        .asObject(Map)
+ 
+    // Check the response status of the subtask creation
+    if (resp.status != 201) {
+        logger.warn("Failed to create subtask for ${assignee}: Status: ${resp.status} ${resp.body}")
+    } else {
+        logger.warn("Subtask created successfully for ${assignee}: ${resp.body.key}")
+    }
+}
+ 
