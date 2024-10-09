@@ -1,0 +1,108 @@
+import com.atlassian.jira.user.ApplicationUser
+import com.atlassian.jira.component.ComponentAccessor
+import com.atlassian.jira.issue.Issue
+import com.atlassian.jira.issue.customfields.option.Options
+import com.atlassian.jira.issue.fields.CustomField
+
+// Logger instantiation
+def log = org.apache.log4j.Logger.getLogger(getClass())
+log.setLevel(org.apache.log4j.Level.INFO) // Set log level as needed
+
+log.info("Post function running for architecture : " + issue.getDescription());
+
+if (issue.isSubTask()) {
+    log.debug("This is a subtask, not proceeding with subtask creation!")
+    return
+}
+
+customFieldManager = ComponentAccessor.getCustomFieldManager()
+
+log.debug "grabbing existing subtasks"
+
+// Fetch existing subtasks if any
+subTasks = issue.getSubTaskObjects()
+
+def skipableAssignees = new ArrayList()
+if (subTasks) {
+    // List of assignees for whom the subtask status is NOT "Review completed"
+    subTasks.each { subTask ->
+        // Collect assignees of the review subtasks for which review is not completed
+        if (subTask.getIssueTypeObject().getId() == "19935" && subTask.getStatusObject().getId() != "18383" && subTask.getStatusObject().getId() != "19759") {
+            // "Review Completed" = "18383" and "Cancel" = "19300"
+            skipableAssignees.add(subTask.assigneeId)
+        }
+    }
+}
+
+	log.debug "Here are the reviewers to be skipped while creating a subtask : " + skipableAssignees
+
+	log.debug("Creating subtasks for mandatory reviewers...")
+	mandatoryReviewer = customFieldManager.getCustomFieldObject("customfield_52380")
+	mandatoryReviewers = mandatoryReviewer.getValue(issue)
+
+	createAndAssignReviewSubtask(mandatoryReviewers, issue, true, skipableAssignees)
+
+	log.debug("Creating subtasks for optional reviewers...")
+	optionalReviewer = customFieldManager.getCustomFieldObject("customfield_52381")
+	optionalReviewers = optionalReviewer.getValue(issue)
+	createAndAssignReviewSubtask(optionalReviewers, issue, false, skipableAssignees)
+
+	log.info("Review subtask creation for issue: '" + issue.getSummary() + "' completed.")
+
+	// Function definitions
+	def createAndAssignReviewSubtask(List reviewers, Issue issue, boolean isMandatory, List skipList) {
+	    log.setLevel(org.apache.log4j.Level.DEBUG)
+	    log.debug("In createAndAssignReviewSubtask(), we have following reviewers: " + reviewers)
+
+	    userManager = ComponentAccessor.getUserManager()
+
+	    for (ApplicationUser reviewer in reviewers) {
+	        if (skipList.contains(reviewer.getKey())) continue
+
+	        log.debug("Running loop for the reviewer: " + reviewer)
+	        log.debug("Running loop for the reviewer key : " + reviewer.getKey())
+
+	        if (reviewer) {
+	            ApplicationUser loggedInUser = ComponentAccessor.getJiraAuthenticationContext().getLoggedInUser()
+	            createSubtask(issue, "19935", reviewer, loggedInUser, isMandatory)
+	        } else {
+	            log.debug("Not creating a subtask, reviewer name doesn't match any existing user!")
+	        }
+	    }
+	    log.debug("Completed: createAndAssignReviewSubtask()")
+	}
+
+	def createSubtask(Issue parentIssue, String subtaskTypeId, ApplicationUser assignee, ApplicationUser loggedInUser, boolean isMandatory) {
+	    log.setLevel(org.apache.log4j.Level.DEBUG)
+
+	    log.debug("About to create a new issue.")
+	    issueFactory = ComponentAccessor.getIssueFactory()
+	    issueManager = ComponentAccessor.getIssueManager()
+	    subTaskManager = ComponentAccessor.getSubTaskManager()
+
+	    issueObject = issueFactory.getIssue()
+	    issueObject.setIssueTypeId(subtaskTypeId)
+	    issueObject.setProject(parentIssue.getProject())
+	    if (isMandatory) {
+	        CustomField cf = customFieldManager.getCustomFieldObjectByName("Is Required")
+	        Options opts = cf.getOptions(null, cf.getRelevantConfig(issue), null)
+	        yes = opts.get(0)
+	        issueObject.setCustomFieldValue(cf, yes)
+	        issueObject.setSummary("[Mandatory] Review for : " + parentIssue.getSummary())
+	    } else {
+	        CustomField cf = customFieldManager.getCustomFieldObjectByName("Is Required")
+	        Options opts = cf.getOptions(null, cf.getRelevantConfig(issue), null)
+	        no = opts.get(1)
+	        issueObject.setCustomFieldValue(cf, no)
+	        issueObject.setSummary("[Optional] Review for : " + parentIssue.getSummary())
+	    }
+	    issueObject.setAssigneeId(assignee.key)
+	    issueObject.setReporter(loggedInUser)
+	    issueObject.setParentId(parentIssue.getId())
+
+	    log.debug("Creating the subtask in database...")
+	    Issue reviewSubtask = issueManager.createIssueObject(loggedInUser, issueObject)
+
+	    log.debug("linking subtask and the parent")
+	    subTaskManager.createSubTaskIssueLink(parentIssue, reviewSubtask, loggedInUser)
+	}
