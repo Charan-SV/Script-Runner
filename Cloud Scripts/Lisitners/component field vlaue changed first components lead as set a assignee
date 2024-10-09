@@ -1,0 +1,44 @@
+def issueKey = issue.key
+
+def currentUser = user.accountId.toString()
+
+for (item in changelog.items) {
+
+    logger.info("Changed field name" + item.field)
+    
+    // Check if the field that changed is "components"
+    if (item.field == "Component") {
+
+        // Get current assignee and the first component (assuming you're interested in the first one)
+        def assigneeId = issue.fields.assignee?.accountId
+        def component = issue.fields.components[0]?.id
+
+        // Fetch component details using the component ID
+        def result1 = get('/rest/api/3/component/' + component)
+            .header('Content-Type', 'application/json')
+            .asObject(Map)
+
+        def cleadId = result1.body?.lead?.accountId
+
+        // Log the current assignee, component, and component lead
+        logger.warn("Assignee ID: " + assigneeId)
+        logger.warn("Component ID: " + component)
+        logger.warn("Component Lead ID: " + cleadId)
+
+        // If the component lead is not the current assignee, update the assignee
+        if (cleadId != assigneeId) {
+            def result2 = put('/rest/api/2/issue/' + issueKey)
+                .header('Content-Type', 'application/json')
+                .body([
+                    fields: [
+                        assignee: [
+                            id: cleadId
+                        ]
+                    ]
+                ])
+                .asString()
+
+            logger.info("Issue assignee updated to the component lead.")
+        }
+    }
+}
